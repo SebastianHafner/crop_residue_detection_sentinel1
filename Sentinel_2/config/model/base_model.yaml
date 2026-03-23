@@ -1,0 +1,4 @@
+name: 'pixelencodernet'
+in_channels: 128
+out_channels: 10
+loss_type: 'BinaryCrossEntropy'

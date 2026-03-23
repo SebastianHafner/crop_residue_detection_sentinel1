@@ -1,0 +1,9 @@
+seed: 7
+debug: False
+log_freq: 10
+
+defaults:
+  - trainer: base_trainer
+  - model: base_model
+  - dataloader: base_dataloader
+  - paths: paths

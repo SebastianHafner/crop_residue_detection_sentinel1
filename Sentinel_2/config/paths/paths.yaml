@@ -1,0 +1,3 @@
+dataset_path: '/home/sebastian-hafner/projects/satdes/data/debug_dataset/'
+samples_file: '/home/sebastian-hafner/projects/satdes/data/debug_samples.json'
+output_path: '/home/sebastian-hafner/repos/crop_residue_detection/outputs/'
