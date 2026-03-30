@@ -1,0 +1,239 @@
+# Crop Residue Detection — PSENet Pipeline
+
+Multi-sensor Sentinel-1 + Sentinel-2 time series classification of crop
+residue management in winter wheat fields in Skåne, Sweden.
+
+---
+
+## Directory structure
+
+```
+thesis_pipeline/
+├── config/
+│   └── config.yaml              ← ALL settings live here
+├── datasets/
+│   └── crop_dataset.py          ← PyTorch Dataset (pixel-set loader)
+├── models/
+│   ├── psenet.py                ← PSENet architecture (PixelEncoder + TAE)
+│   └── model_manager.py         ← build / save / load model
+├── utils/
+│   ├── loss_functions.py        ← CrossEntropy with class weights
+│   ├── schedulers.py            ← LR schedulers
+│   └── evaluation.py            ← F1, OA, AUC, confusion matrix
+├── scripts/
+│   └── build_samples_json.py    ← STEP 1: build the sample index
+├── train_network.py             ← STEP 2: train PSENet
+├── run_baselines.py             ← STEP 3: train ML baselines
+├── run_attention_analysis.py    ← STEP 4: attention figures for thesis
+└── requirements.txt
+```
+
+---
+
+## One-time setup
+
+```bash
+# 1. Activate your conda environment
+conda activate dlenv
+
+# 2. Install dependencies
+cd /home/johan/Thesis
+pip install -r thesis_pipeline/requirements.txt
+
+# 3. Create a .env file with your WandB key (optional but recommended)
+echo "WANDB_API_KEY=your_key_here" > .env
+
+# 4. Create output directories
+mkdir -p /home/johan/Thesis/output/{models,results,figures}
+```
+
+---
+
+## Step-by-step usage
+
+### STEP 1 — Build the sample index
+
+Run this once after the field parquet and dataset are ready.
+It scans the dataset directory, joins SBA labels, and writes `samples.json`.
+
+```bash
+cd /home/johan/Thesis
+python thesis_pipeline/scripts/build_samples_json.py
+
+# Options:
+python thesis_pipeline/scripts/build_samples_json.py \
+    --train 0.70 \
+    --val 0.15 \
+    --crop_filter winter_wheat \
+    --seed 42
+```
+
+Output: `/home/johan/Thesis/Sentinel_1/ost/s1/S1_Timeseries/dataset/samples.json`
+
+---
+
+### STEP 2 — Train PSENet
+
+```bash
+cd /home/johan/Thesis/thesis_pipeline
+python train_network.py
+```
+
+Override any config value without editing config.yaml:
+
+```bash
+# Change learning rate and number of heads
+python train_network.py trainer.lr=5e-4 model.n_heads=8
+
+# Debug run (fast, no WandB)
+python train_network.py debug=true trainer.epochs=3
+
+# Hyperparameter sweep (Hydra multirun)
+python train_network.py -m \
+    model.embed_dim=64,128,256 \
+    trainer.lr=1e-3,5e-4 \
+    model.n_heads=2,4
+```
+
+Outputs:
+- `/home/johan/Thesis/output/models/psenet_s1s2_E128_H4_{timestamp}.pt`
+- `/home/johan/Thesis/output/results/psenet_s1s2_E128_H4_{timestamp}_test_metrics.json`
+
+---
+
+### STEP 3 — Train ML baselines
+
+```bash
+cd /home/johan/Thesis/thesis_pipeline
+python run_baselines.py
+
+# Skip cross-validation for speed:
+python run_baselines.py --no_cv
+
+# Compare against a PSENet result:
+python run_baselines.py \
+    --psenet_results /home/johan/Thesis/output/results/psenet_s1s2_E128_H4_20240901_120000_test_metrics.json
+```
+
+Outputs:
+- `/home/johan/Thesis/output/results/baseline_results.csv`
+- `/home/johan/Thesis/output/results/baseline_cv_results.csv`
+- `/home/johan/Thesis/output/results/comparison_table.csv`
+
+---
+
+### STEP 4 — Attention analysis (thesis figures)
+
+```bash
+cd /home/johan/Thesis/thesis_pipeline
+
+# Auto-loads the most recently trained checkpoint:
+python run_attention_analysis.py
+
+# Or specify explicitly:
+python run_attention_analysis.py \
+    --experiment psenet_s1s2_E128_H4_20240901_120000
+
+# Or point at a checkpoint file:
+python run_attention_analysis.py \
+    --checkpoint /home/johan/Thesis/output/models/psenet_s1s2_E128_H4_20240901_120000.pt
+```
+
+Outputs:
+- `/home/johan/Thesis/output/figures/*_attn_by_doy.pdf`
+- `/home/johan/Thesis/output/figures/*_attn_by_class.pdf`
+- `/home/johan/Thesis/output/figures/*_attn_heatmap.pdf`
+- `/home/johan/Thesis/output/figures/*_attn_entropy.pdf`
+- `/home/johan/Thesis/output/results/*_attention_summary.json`
+
+---
+
+## Config reference
+
+All settings in `config/config.yaml`. Key values to check before running:
+
+| Key | Current value | What it controls |
+|-----|--------------|-----------------|
+| `paths.dataset_path` | `/home/johan/Thesis/Sentinel_1/ost/s1/S1_Timeseries/dataset` | Root of per-field dataset |
+| `paths.fields_file` | `.../Example_Fields/example_fields.parquet` | Field geometries + SBA labels |
+| `paths.output_path` | `/home/johan/Thesis/output` | Checkpoints, results, figures |
+| `model.in_channels` | `12` | S1(6) + S2(6) bands |
+| `model.out_channels` | `2` | no_residue / residue |
+| `model.embed_dim` | `128` | Embedding size E |
+| `dataloader.n_pixels` | `64` | Fixed pixel set size per field |
+| `trainer.class_weights` | `[1.0, 3.0]` | Upweight residue class |
+| `trainer.patience` | `15` | Early stopping epochs |
+| `wandb.project` | `crop-residue-skane` | WandB project name |
+
+---
+
+## Expected dataset structure
+
+The dataset directory should look like this:
+
+```
+dataset/
+├── samples.json                       ← generated by build_samples_json.py
+├── metadata.json                      ← {"timestamps": ["2024-06-07", ...]}
+└── data/
+    ├── {field_id}/
+    │   ├── mask_{field_id}.tif        ← boolean field mask (H, W)
+    │   ├── s1_{YYYYMMDD}_{field_id}.tif  ← 6-band stacked S1 TIF
+    │   └── s2_{timestamp}.tif         ← S2 bands (6, H, W): B2,B3,B4,B8,B11,B12
+    └── ...
+```
+
+### S1 stacked TIF band order
+
+Written by `s1_field_extraction.py`, verified against SNAP output:
+
+| Band | Name | Original SNAP unit | Stored on disk |
+|------|------|--------------------|----------------|
+| 1 | VV (gamma0) | dB | dB (no change) |
+| 2 | VH (gamma0) | dB | dB (no change) |
+| 3 | Alpha | 0–90° | 0–1 (÷90, normalised by `run_haalpha_timeseries.py`) |
+| 4 | Anisotropy | 0–1 | 0–1 (no change, SNAP native) |
+| 5 | Entropy | 0–1 | 0–1 (no change, SNAP native) |
+| 6 | DpRVI | 0–1 | 0–1 (no change, SNAP native) |
+
+---
+
+## Known data handling (in the code)
+
+- **Alpha** normalised from 0–90° to 0–1 on disk by `run_haalpha_timeseries.py` (÷90). No further action in `crop_dataset.py`.
+- **Entropy** is naturally 0–1 from SNAP. No normalisation applied anywhere.
+- **Anisotropy** and **DpRVI** are naturally 0–1 from SNAP. No normalisation applied anywhere.
+- **S2 bands** stored as int16 reflectance → divided by 10000 in `_load_s2()` in `crop_dataset.py`.
+- **Variable field sizes** → padded to `n_pixels=64` by `PixelSetSampler`.
+- **Variable T across batch** → DOY sequences padded in `collate_fn()`.
+- **metadata.json key** is lowercase `timestamps` — matches `crop_dataset.py` `meta['timestamps']`.
+- **S1 filename format** is `s1_{YYYYMMDD}_{field_id}.tif` — `crop_dataset.py` converts ISO timestamps to YYYYMMDD automatically.
+
+---
+
+## Troubleshooting
+
+**`AssertionError: Number of classes in dataset (X) does not match cfg.model.out_channels`**
+→ Your `samples.json` has a different number of unique label values than `out_channels=2`.
+  Check `build_samples_json.py` ran correctly and the label column is 0/1 integers.
+
+**`FileNotFoundError: mask_{field_id}.tif`**
+→ Your mask file naming convention differs. Check `_load_field_mask()` in `crop_dataset.py`.
+
+**`FileNotFoundError: s1_{YYYYMMDD}_{field_id}.tif`**
+→ Run `s1_field_extraction.py` to generate the stacked S1 TIFs. Use `--overwrite` if
+  you need to regenerate after fixing band order or normalisation.
+
+**`KeyError: timestamps` in metadata.json**
+→ Your metadata.json uses uppercase `TIMESTAMPS`. Regenerate it by rerunning
+  `s1_field_extraction.py`, which writes the correct lowercase key.
+
+**`AssertionError: Expected 6 bands`**
+→ Your S1 TIFs are old 3-band files from before the stacking update.
+  Delete them and rerun `s1_field_extraction.py --overwrite`.
+
+**CUDA out of memory**
+→ Reduce `trainer.batch_size` or `dataloader.n_pixels` in config.yaml.
+
+**WandB not logging**
+→ Set `debug=true` to disable WandB, or check your `WANDB_API_KEY` in `.env`.

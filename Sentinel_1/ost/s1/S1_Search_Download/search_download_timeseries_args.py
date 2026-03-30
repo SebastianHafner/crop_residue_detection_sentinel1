@@ -9,7 +9,7 @@ a specific ascending track, and downloads the scenes via ASF.
 
 Usage:
     python search_download_timeseries_args.py \
-        --fields_file /home/johan/Thesis/Sentinel_1/ost/s1/S1_Search_Download/preprocessed_field_geometries_skane.parquet \
+        --fields_file /home/johan/Thesis/Sentinel_1/ost/s1/S1_Search_Download/preprocessed_field_geometries_skane_crop4.parquet \
         --aoi_shp     /home/johan/Thesis/Sentinel_1/ost/s1/Example_Fields/examplefields.shp \
         --out_parquet /home/johan/Thesis/Sentinel_1/ost/s1/Example_Fields/example_fields.parquet \
         --hull_shp    /home/johan/Thesis/Sentinel_1/ost/s1/convex_hull.shp \
